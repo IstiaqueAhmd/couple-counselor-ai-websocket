@@ -6,3 +6,6 @@ python-multipart
 jinja2
 pymongo
 uvicorn[standard]
+chromadb
+sentence-transformers
+PyPDF2
