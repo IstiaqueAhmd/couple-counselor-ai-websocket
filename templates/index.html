@@ -38,6 +38,30 @@
                 padding: 10px 15px;
                 max-width: 80%;
             }
+            .admin-message { 
+                text-align: left; 
+                margin-bottom: 15px;
+            }
+            .admin-bubble {
+                display: inline-block;
+                background-color: #ffc107;
+                color: #212529;
+                border-radius: 18px 18px 18px 0;
+                padding: 10px 15px;
+                max-width: 80%;
+            }
+            .counselor-message { 
+                text-align: left; 
+                margin-bottom: 15px;
+            }
+            .counselor-bubble {
+                display: inline-block;
+                background-color: #20c997;
+                color: white;
+                border-radius: 18px 18px 18px 0;
+                padding: 10px 15px;
+                max-width: 80%;
+            }
             .typing-indicator { 
                 display: none;
                 color: #6c757d;
@@ -99,31 +123,110 @@
     }
     
     document.querySelector("#ws-id").textContent = client_id;
-    const ws = new WebSocket(`ws://${window.location.host}/ws/${client_id}`);
     const chatForm = document.getElementById('chat-form');
     const messageInput = document.getElementById('messageText');
+    
+    // Load previous chat history
+    async function loadChatHistory() {
+        try {
+            const response = await fetch(`/history/${client_id}`);
+            if (response.ok) {
+                const messages = await response.json();
+                const messagesContainer = document.getElementById('messages');
+                
+                // Clear the initial message
+                messagesContainer.innerHTML = '';
+                
+                messages.forEach(msg => {
+                    addMessageToUI(msg.sender, msg.message, new Date(msg.timestamp));
+                });
+                
+                // Scroll to bottom
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+        } catch (error) {
+            console.error('Error loading chat history:', error);
+        }
+    }
+    
+    // Function to add message to UI
+    function addMessageToUI(sender, message, timestamp) {
+        const messages = document.getElementById('messages');
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('mb-3');
+        
+        if (sender === 'user') {
+            messageElement.classList.add('user-message');
+            messageElement.innerHTML = `
+                <div class="user-bubble">
+                    ${message}
+                    <span class="timestamp">${formatTime(timestamp)}</span>
+                </div>
+            `;
+        } else if (sender === 'ai') {
+            messageElement.classList.add('ai-message');
+            messageElement.innerHTML = `
+                <div class="ai-bubble">
+                    ${message}
+                    <span class="timestamp">${formatTime(timestamp)}</span>
+                </div>
+            `;
+        } else if (sender === 'admin') {
+            messageElement.classList.add('admin-message');
+            messageElement.innerHTML = `
+                <div class="admin-bubble">
+                    <strong>Admin:</strong> ${message}
+                    <span class="timestamp">${formatTime(timestamp)}</span>
+                </div>
+            `;
+        } else if (sender === 'counselor') {
+            messageElement.classList.add('counselor-message');
+            messageElement.innerHTML = `
+                <div class="counselor-bubble">
+                    <strong>Counselor:</strong> ${message}
+                    <span class="timestamp">${formatTime(timestamp)}</span>
+                </div>
+            `;
+        } else {
+            // Default style for other senders
+            messageElement.classList.add('ai-message');
+            messageElement.innerHTML = `
+                <div class="ai-bubble">
+                    <strong>${sender}:</strong> ${message}
+                    <span class="timestamp">${formatTime(timestamp)}</span>
+                </div>
+            `;
+        }
+        
+        messages.appendChild(messageElement);
+        messages.scrollTop = messages.scrollHeight;
+    }
+    
+    // Initialize WebSocket connection
+    const ws = new WebSocket(`ws://${window.location.host}/ws/${client_id}`);
     
     ws.onmessage = function(event) {
         const typingIndicator = document.getElementById("typing-indicator");
         typingIndicator.style.display = 'none';
         
         const data = JSON.parse(event.data);
-        const messages = document.getElementById('messages');
         
-        // Only process AI responses here
-        if (data.sender === 'ai') {
-            const messageElement = document.createElement('div');
-            messageElement.classList.add('mb-3');
-            messageElement.classList.add('ai-message');
-            messageElement.innerHTML = `
-                <div class="ai-bubble">
-                    ${data.message}
-                    <span class="timestamp">${formatTime(new Date(data.timestamp))}</span>
-                </div>
-            `;
-            messages.appendChild(messageElement);
-            messages.scrollTop = messages.scrollHeight;
-        }
+        // Handle all types of incoming messages
+        addMessageToUI(data.sender, data.message, new Date(data.timestamp || Date.now()));
+    };
+    
+    ws.onopen = function(event) {
+        console.log('WebSocket connected');
+        // Load chat history after connection is established
+        loadChatHistory();
+    };
+    
+    ws.onerror = function(error) {
+        console.error('WebSocket error:', error);
+    };
+    
+    ws.onclose = function(event) {
+        console.log('WebSocket connection closed');
     };
     
     function sendMessage(event) {
@@ -131,23 +234,13 @@
         const message = messageInput.value.trim();
         
         if (message) {
-            const messages = document.getElementById('messages');
             const typingIndicator = document.getElementById("typing-indicator");
             
             // Add user message to UI immediately
-            const userMessageElement = document.createElement('div');
-            userMessageElement.classList.add('mb-3', 'user-message');
-            userMessageElement.innerHTML = `
-                <div class="user-bubble">
-                    ${message}
-                    <span class="timestamp">${formatTime(new Date())}</span>
-                </div>
-            `;
-            messages.appendChild(userMessageElement);
+            addMessageToUI('user', message, new Date());
             
-            // Show typing indicator
+            // Show typing indicator for AI responses
             typingIndicator.style.display = 'block';
-            messages.scrollTop = messages.scrollHeight;
             
             // Send to WebSocket
             ws.send(message);
@@ -168,7 +261,7 @@
         }
     });
     
-    // Auto-focus input
+    // Auto-focus input when page loads
     window.onload = function() {
         messageInput.focus();
     };

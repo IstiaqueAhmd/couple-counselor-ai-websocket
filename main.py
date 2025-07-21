@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 from managers.db_manager import DBManager
 from managers.openai_manager import OpenAIManager
 from managers.connection_manager import ConnectionManager
@@ -12,6 +13,11 @@ from utils.helpers import create_json_message
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Pydantic models for request bodies
+class MessageData(BaseModel):
+    message: str
+    sender: str = "admin"  # Default sender is 'admin'
 
 # Initialize FastAPI
 app = FastAPI()
@@ -147,6 +153,54 @@ async def get_history(client_id: int):
         }
         for msg in messages
     ]
+
+@app.post("/send-message/{client_id}")
+async def send_personal_message(client_id: int, message_data: MessageData):
+    """Send a personal message to a specific client"""
+    try:
+        # Check if client is connected
+        if client_id not in connection_manager.active_connections:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Client {client_id} is not connected"
+            )
+        
+        # Send the message
+        await connection_manager.send_personal_message(
+            create_json_message(message_data.sender, message_data.message),
+            client_id
+        )
+        
+        # Save the message to database
+        DBManager.save_message(client_id, message_data.sender, message_data.message)
+        
+        logger.info(f"Sent personal message to client {client_id} from {message_data.sender}")
+        
+        return {
+            "message": f"Message sent successfully to client {client_id}",
+            "client_id": client_id,
+            "sender": message_data.sender,
+            "content": message_data.message
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending personal message to client {client_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
+
+@app.get("/clients")
+async def get_active_clients():
+    """Get list of active connected clients"""
+    try:
+        active_clients = list(connection_manager.active_connections.keys())
+        return {
+            "active_clients": active_clients,
+            "count": len(active_clients)
+        }
+    except Exception as e:
+        logger.error(f"Error getting active clients: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
