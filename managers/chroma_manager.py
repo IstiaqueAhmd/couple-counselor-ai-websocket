@@ -4,7 +4,10 @@ import chromadb
 from chromadb.config import Settings
 from typing import List, Dict
 import PyPDF2
-from sentence_transformers import SentenceTransformer
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -12,20 +15,27 @@ class ChromaManager:
     def __init__(self, persist_directory: str = "chromadb"):
         """Initialize ChromaDB client and collection"""
         try:
+            # Configure Gemini API
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError("GEMINI_API_KEY environment variable not set")
+            genai.configure(api_key=api_key)
+            
             # Initialize ChromaDB client
             self.client = chromadb.PersistentClient(
                 path=persist_directory,
                 settings=Settings(allow_reset=True)
             )
             
-            # Get or create collection for counseling knowledge
+            # Get or create collection for counseling knowledge with Gemini embeddings
             self.collection = self.client.get_or_create_collection(
                 name="counseling_knowledge",
-                metadata={"description": "Couple counseling knowledge base"}
+                metadata={"description": "Couple counseling knowledge base"},
+                embedding_function=chromadb.utils.embedding_functions.GoogleGenerativeAiEmbeddingFunction(
+                    api_key=api_key,
+                    model_name="models/text-embedding-004"
+                )
             )
-            
-            # Initialize embedding model
-            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
             
             logger.info(f"ChromaDB initialized with collection: {self.collection.name}")
             
