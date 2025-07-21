@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 python-dotenv
-google-generativeai
+openai
 python-multipart
 jinja2
 pymongo

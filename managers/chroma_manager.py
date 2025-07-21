@@ -4,7 +4,6 @@ import chromadb
 from chromadb.config import Settings
 from typing import List, Dict
 import PyPDF2
-import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,33 +14,59 @@ class ChromaManager:
     def __init__(self, persist_directory: str = "chromadb"):
         """Initialize ChromaDB client and collection"""
         try:
-            # Configure Gemini API
-            api_key = os.getenv("GEMINI_API_KEY")
+            # Configure OpenAI API
+            api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:
-                raise ValueError("GEMINI_API_KEY environment variable not set")
-            genai.configure(api_key=api_key)
+                raise ValueError("OPENAI_API_KEY environment variable not set")
             
             # Initialize ChromaDB client
             self.client = chromadb.PersistentClient(
                 path=persist_directory,
-                settings=Settings(allow_reset=True)
-            )
-            
-            # Get or create collection for counseling knowledge with Gemini embeddings
-            self.collection = self.client.get_or_create_collection(
-                name="counseling_knowledge",
-                metadata={"description": "Couple counseling knowledge base"},
-                embedding_function=chromadb.utils.embedding_functions.GoogleGenerativeAiEmbeddingFunction(
-                    api_key=api_key,
-                    model_name="models/text-embedding-004"
+                settings=Settings(
+                    allow_reset=True,
+                    anonymized_telemetry=False
                 )
             )
             
-            logger.info(f"ChromaDB initialized with collection: {self.collection.name}")
+            # Get or create collection for counseling knowledge with OpenAI embeddings
+            try:
+                # Try to get existing collection first
+                self.collection = self.client.get_collection(
+                    name="counseling_knowledge"
+                )
+                logger.info(f"Retrieved existing ChromaDB collection: {self.collection.name}")
+            except Exception:
+                # Create new collection if it doesn't exist
+                self.collection = self.client.create_collection(
+                    name="counseling_knowledge",
+                    metadata={"description": "Couple counseling knowledge base"},
+                    embedding_function=chromadb.utils.embedding_functions.OpenAIEmbeddingFunction(
+                        api_key=api_key,
+                        model_name="text-embedding-3-small"
+                    )
+                )
+                logger.info(f"Created new ChromaDB collection: {self.collection.name}")
             
         except Exception as e:
             logger.error(f"Failed to initialize ChromaDB: {str(e)}")
-            raise
+            # Try fallback initialization without OpenAI embeddings
+            try:
+                logger.warning("Attempting fallback initialization with default embeddings")
+                self.client = chromadb.PersistentClient(
+                    path=persist_directory,
+                    settings=Settings(
+                        allow_reset=True,
+                        anonymized_telemetry=False
+                    )
+                )
+                self.collection = self.client.get_or_create_collection(
+                    name="counseling_knowledge_fallback",
+                    metadata={"description": "Couple counseling knowledge base (fallback)"}
+                )
+                logger.info(f"Fallback ChromaDB initialized with collection: {self.collection.name}")
+            except Exception as fallback_error:
+                logger.error(f"Fallback initialization also failed: {str(fallback_error)}")
+                raise
 
     def chunk_text(self, text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
         """Split text into overlapping chunks"""

@@ -4,7 +4,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from managers.db_manager import DBManager
-from managers.gemini_manager import GeminiManager
+from managers.openai_manager import OpenAIManager
 from managers.connection_manager import ConnectionManager
 from managers.chroma_manager import ChromaManager
 from utils.helpers import create_json_message
@@ -18,7 +18,7 @@ app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
 # Managers
-gemini_manager = GeminiManager()
+openai_manager = OpenAIManager()
 connection_manager = ConnectionManager()
 chroma_manager = ChromaManager()
 
@@ -41,7 +41,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: int):
             # Save user message
             DBManager.save_message(client_id, "user", message)
 
-            ai_response = gemini_manager.get_response(client_id, message)
+            ai_response = openai_manager.get_response(client_id, message)
 
             # Save AI response
             DBManager.save_message(client_id, "ai", ai_response)
@@ -56,12 +56,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: int):
     except WebSocketDisconnect:
         logger.info(f"Client {client_id} disconnected")
         connection_manager.disconnect(client_id)
-        gemini_manager.remove_chat(client_id)
+        openai_manager.remove_chat(client_id)
 
     except Exception as e:
         logger.error(f"WebSocket error for client {client_id}: {str(e)}")
         connection_manager.disconnect(client_id)
-        gemini_manager.remove_chat(client_id)
+        openai_manager.remove_chat(client_id)
 
 @app.post("/ingest")
 async def ingest_file(file: UploadFile = File(...)):
