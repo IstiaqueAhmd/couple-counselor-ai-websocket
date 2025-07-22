@@ -19,6 +19,13 @@ class MessageData(BaseModel):
     message: str
     sender: str = "admin"  # Default sender is 'admin'
 
+class UserData(BaseModel):
+    user_id: int
+    name: str
+    age: int
+    gender: str
+    spouse_id: int = None
+
 # Initialize FastAPI
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -201,6 +208,41 @@ async def get_active_clients():
     except Exception as e:
         logger.error(f"Error getting active clients: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/users/save")
+async def save_user(user_data: UserData):
+    """Save user information"""
+    try:
+        DBManager.save_user(
+            user_data.user_id, 
+            user_data.name, 
+            user_data.age, 
+            user_data.gender, 
+            user_data.spouse_id
+        )
+        return {"message": "User saved successfully"}
+    except Exception as e:
+        logger.error(f"Error saving user: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/users/{user_id}/spouse")
+async def get_spouse(user_id: int):
+    """Get spouse information for a user"""
+    try:
+        spouse = DBManager.get_spouse(user_id)
+        if spouse:
+            return {
+                "spouse_id": spouse["user_id"],
+                "name": spouse["name"],
+                "age": spouse["age"],
+                "gender": spouse["gender"]
+            }
+        return {"message": "Spouse not found"}
+    except Exception as e:
+        logger.error(f"Error getting spouse information: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
