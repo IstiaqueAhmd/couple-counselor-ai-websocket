@@ -39,6 +39,11 @@ class DBManager:
     def get_messages(client_id: int):
         return list(collection.find({"client_id": client_id}))
     @staticmethod
+    def get_user(user_id: int):
+        """Get user information by user_id"""
+        return users.find_one({"user_id": user_id})
+
+    @staticmethod
     def get_spouse(user_id: int):
         """Get spouse information with bidirectional lookup"""
         user = users.find_one({"user_id": user_id})
