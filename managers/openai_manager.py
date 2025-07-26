@@ -109,14 +109,23 @@ class OpenAIManager:
                 "current_message": message
             }
             
+            # Get recent messages to exclude from search results
+            recent_messages_content = set()
+            if client_id in self.chat_sessions:
+                recent_messages = self.chat_sessions[client_id][-self.recent_messages_count:]
+                for msg in recent_messages:
+                    recent_messages_content.add(msg.get("content", "").strip())
+            
             # Long-term memory from conversation history
             if search_results["conversation_history"]:
-                # Remove duplicates and format properly
+                # Remove duplicates and recent messages
                 seen_content = set()
                 memory_items = []
                 for result in search_results["conversation_history"]:
                     content = result['content'].strip()
-                    if content not in seen_content and len(content) > 0:
+                    if (content not in seen_content and 
+                        content not in recent_messages_content and 
+                        len(content) > 0):
                         seen_content.add(content)
                         memory_items.append(f"- {content}")
                 
@@ -153,29 +162,6 @@ class OpenAIManager:
                 "current_message": message
             }
 
-    def create_context_prompt(self, context: Dict[str, str]) -> str:
-        """Create a structured context prompt for the AI"""
-        prompt_parts = []
-        
-        if context["long_term_memory"]:
-            prompt_parts.append(f"""LONG-TERM MEMORY (Previous conversations with this user):
-{context["long_term_memory"]}""")
-        
-        if context["relevant_knowledge"]:
-            prompt_parts.append(f"""RELEVANT KNOWLEDGE (Professional guidance):
-{context["relevant_knowledge"]}""")
-        
-        prompt_parts.append(f"""CURRENT MESSAGE: {context["current_message"]}
-                            
-        Please respond to the current message while being aware of:
-        1. SHORT-TERM MEMORY: Recent conversation context (last few messages)
-        2. LONG-TERM MEMORY: Important details from past sessions shown above
-        3. RELEVANT KNOWLEDGE: Professional guidance that applies to this situation
-
-        Provide a personalized response that acknowledges continuity while addressing the current concern.""")
-        
-        return "\n\n".join(prompt_parts)
-
     def get_response(self, client_id: int, message: str) -> str:
         """Get AI response for user message"""
         if client_id not in self.chat_sessions:
@@ -191,21 +177,20 @@ class OpenAIManager:
                 "content": message
             })
             
-            # Create enhanced system message with context
-            base_system_msg = self.chat_sessions[client_id][0]["content"]
-            enhanced_system_msg = self.create_enhanced_system_message(base_system_msg, context)
-            
-            # Prepare messages for API call
+            # Prepare messages for API call with separate context system messages
             current_messages = self.chat_sessions[client_id].copy()
-            current_messages[0]["content"] = enhanced_system_msg  # Replace system message
             
-            # Remove duplicate consecutive messages before trimming
-            cleaned_messages = self.remove_duplicate_messages(current_messages)
+            # Insert context system messages after the base system message
+            context_messages = self.create_context_system_messages(context)
             
-            # Trim and get response
-            trimmed_messages = self.trim_conversation_history(cleaned_messages)
-            print(trimmed_messages)
+            # Insert context messages right after the base system message (index 1)
+            for i, context_msg in enumerate(context_messages):
+                current_messages.insert(1 + i, context_msg)
 
+            # Trim and get response
+            trimmed_messages = self.trim_conversation_history(current_messages)
+            print(trimmed_messages)
+            
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=trimmed_messages,
@@ -234,40 +219,37 @@ class OpenAIManager:
             logger.error(f"OpenAI error for client {client_id}: {str(e)}")
             return "Sorry, I encountered an error processing your request."
 
-    def create_enhanced_system_message(self, base_message: str, context: Dict[str, str]) -> str:
-        """Create a single enhanced system message with context"""
-        enhanced_parts = [base_message]
+    def create_context_system_messages(self, context: Dict[str, str]) -> List[Dict[str, str]]:
+        """Create separate system messages for each context type"""
+        context_messages = []
         
         if context["long_term_memory"]:
-            enhanced_parts.append(f"\nRELEVANT CONVERSATION HISTORY (This User):\n{context['long_term_memory']}")
+            context_messages.append({
+                "role": "system",
+                "content": f"YOUR PREVIOUS CONVERSATION WITH THIS USER:\n{context['long_term_memory']}"
+            })
         
         if context["partner_history"]:
-            enhanced_parts.append(f"\nRELEVANT PARTNER CONVERSATION HISTORY (Their Partner):\n{context['partner_history']}")
+            context_messages.append({
+                "role": "system", 
+                "content": f"YOUR PREVIOUS CONVERSATION WITH THIS USER'S PARTNER:\n{context['partner_history']}"
+            })
         
         if context["relevant_knowledge"]:
-            enhanced_parts.append(f"\nRELEVANT PROFESSIONAL KNOWLEDGE:\n{context['relevant_knowledge']}")
+            context_messages.append({
+                "role": "system",
+                "content": f"RELEVANT PROFESSIONAL KNOWLEDGE:\n{context['relevant_knowledge']}"
+            })
         
-        enhanced_parts.append("\nUse this context to provide personalized, continuous care while addressing the current message. Consider both individual and relationship dynamics when responding.")
+        # Add instruction message if any context exists
+        if context_messages:
+            context_messages.append({
+                "role": "system",
+                "content": "Use this context to provide personalized, continuous care while addressing the current message. Consider both individual and relationship dynamics when responding."
+            })
         
-        return "\n".join(enhanced_parts)
+        return context_messages
 
-    def remove_duplicate_messages(self, messages: List[Dict]) -> List[Dict]:
-        """Remove consecutive duplicate messages while preserving system message"""
-        if len(messages) <= 1:
-            return messages
-        
-        cleaned = [messages[0]]  # Always keep system message
-        
-        for i in range(1, len(messages)):
-            current = messages[i]
-            previous = cleaned[-1]
-            
-            # Don't add if it's identical to the previous message
-            if not (current["role"] == previous["role"] and 
-                   current["content"] == previous["content"]):
-                cleaned.append(current)
-        
-        return cleaned
     def remove_chat(self, client_id: int):
         if client_id in self.chat_sessions:
             del self.chat_sessions[client_id]
