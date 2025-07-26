@@ -46,26 +46,35 @@ class ChromaManager:
         
         logger.info("ChromaDB manager initialized successfully")
 
-    def chunk_text(self, text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
-        """Split text into overlapping chunks"""
+    def chunk_text(self, text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
+        """Split text into overlapping chunks with token limit consideration"""
         chunks = []
         start = 0
         
+        # Estimate tokens (rough approximation: 1 token ≈ 4 characters)
+        max_chars_per_chunk = 2000  # This should be well under the token limit
+        actual_chunk_size = min(chunk_size, max_chars_per_chunk)
+        
         while start < len(text):
-            end = min(start + chunk_size, len(text))
+            end = min(start + actual_chunk_size, len(text))
             chunk = text[start:end]
             
             # Break at sentence boundaries if possible
             if end < len(text):
-                break_point = max(chunk.rfind('.'), chunk.rfind('\n'))
-                if break_point > start + chunk_size // 2:
+                break_point = max(chunk.rfind('.'), chunk.rfind('\n'), chunk.rfind('!'), chunk.rfind('?'))
+                if break_point > start + actual_chunk_size // 2:
                     chunk = text[start:break_point + 1]
                     end = break_point + 1
             
             if len(chunk.strip()) > 50:
                 chunks.append(chunk.strip())
             
-            start = end - overlap
+            # Ensure we always make progress to avoid infinite loops
+            next_start = end - overlap
+            if next_start <= start:
+                next_start = start + max(1, actual_chunk_size // 2)  # Ensure minimum progress
+            
+            start = next_start
             
         return chunks
 
@@ -94,6 +103,8 @@ class ChromaManager:
                 logger.warning(f"No content extracted from {filename}")
                 return False
             
+            logger.info(f"Processing {len(chunks)} chunks for {filename}")
+            
             # Prepare data for ChromaDB
             base_metadata = {
                 "filename": filename,
@@ -105,18 +116,28 @@ class ChromaManager:
             if metadata:
                 base_metadata.update(metadata)
             
-            documents = chunks
-            metadatas = [{**base_metadata, "chunk_index": i} for i in range(len(chunks))]
-            ids = [f"{filename}_chunk_{i}" for i in range(len(chunks))]
+            # Process chunks in smaller batches to avoid API limits
+            batch_size = 50  # Process 50 chunks at a time
+            total_batches = (len(chunks) + batch_size - 1) // batch_size
             
-            # Add to ChromaDB
-            self.knowledge_collection.add(
-                documents=documents,
-                metadatas=metadatas,
-                ids=ids
-            )
+            for batch_idx in range(total_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, len(chunks))
+                
+                batch_chunks = chunks[start_idx:end_idx]
+                batch_metadatas = [{**base_metadata, "chunk_index": i} for i in range(start_idx, end_idx)]
+                batch_ids = [f"{filename}_chunk_{i}" for i in range(start_idx, end_idx)]
+                
+                logger.info(f"Processing batch {batch_idx + 1}/{total_batches} with {len(batch_chunks)} chunks")
+                
+                # Add batch to ChromaDB
+                self.knowledge_collection.add(
+                    documents=batch_chunks,
+                    metadatas=batch_metadatas,
+                    ids=batch_ids
+                )
             
-            logger.info(f"Successfully ingested {filename} with {len(chunks)} chunks")
+            logger.info(f"Successfully ingested {filename} with {len(chunks)} chunks in {total_batches} batches")
             return True
             
         except Exception as e:
@@ -192,8 +213,16 @@ class ChromaManager:
         """Search both knowledge base and conversation history"""
         knowledge_data = self.search_knowledge_base(query, knowledge_results)
         conversation_data = self.search_conversation_history(client_id, query, conversation_results)
-        partner_id = DBManager.get_spouse(client_id)["user_id"] 
-        partner_data = self.search_conversation_history(partner_id, query, conversation_results)
+        
+        # Safely get partner data
+        partner_data = []
+        try:
+            spouse = DBManager.get_spouse(client_id)
+            if spouse and "user_id" in spouse:
+                partner_id = spouse["user_id"]
+                partner_data = self.search_conversation_history(partner_id, query, conversation_results)
+        except Exception as e:
+            logger.warning(f"Could not retrieve partner data for client {client_id}: {str(e)}")
 
         return {
             "knowledge_base": knowledge_data,

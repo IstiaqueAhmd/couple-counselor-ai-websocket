@@ -1,12 +1,13 @@
 import logging
 import os
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, File, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from managers.db_manager import DBManager
 from managers.openai_manager import OpenAIManager
 from managers.connection_manager import ConnectionManager
+from managers.chroma_manager import ChromaManager
 from utils.helpers import create_json_message
 
 # Configure logging
@@ -32,6 +33,7 @@ templates = Jinja2Templates(directory="templates")
 # Managers
 openai_manager = OpenAIManager()
 connection_manager = ConnectionManager()
+chroma_manager = ChromaManager()
 
 @app.get("/", response_class=HTMLResponse)
 async def chat_page(request: Request):
@@ -130,6 +132,101 @@ async def get_active_clients():
         logger.error(f"Error getting active clients: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
+
+
+"################################### Document ingestion Start ###########################################"
+
+@app.post("/documents/ingest")
+async def ingest_document(file: UploadFile = File(...)):
+    """Ingest a document (PDF or TXT) into the knowledge base"""
+    try:
+        # Validate file type
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+        
+        file_extension = os.path.splitext(file.filename)[1].lower()
+        if file_extension not in ['.pdf', '.txt']:
+            raise HTTPException(
+                status_code=400, 
+                detail="Only PDF and TXT files are supported"
+            )
+        
+        # Create uploads directory if it doesn't exist
+        uploads_dir = "uploads"
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+        # Save uploaded file temporarily
+        file_path = os.path.join(uploads_dir, file.filename)
+        
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        # Ingest document using ChromaManager
+        success = chroma_manager.ingest_document(file_path)
+        
+        if success:
+            logger.info(f"Successfully ingested document: {file.filename}")
+            
+            # Get collection stats
+            stats = chroma_manager.get_collection_stats()
+            
+            return {
+                "message": f"Document '{file.filename}' ingested successfully",
+                "filename": file.filename,
+                "file_type": file_extension,
+                "file_size": len(content),
+                "collection_stats": stats
+            }
+        else:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to ingest document: {file.filename}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error ingesting document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+@app.get("/documents/stats")
+async def get_knowledge_base_stats():
+    """Get knowledge base statistics"""
+    try:
+        stats = chroma_manager.get_collection_stats()
+        return {
+            "knowledge_base": stats,
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"Error getting knowledge base stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/documents/search")
+async def search_knowledge_base(query: str, n_results: int = 3):
+    """Search the knowledge base"""
+    try:
+        if not query.strip():
+            raise HTTPException(status_code=400, detail="Query cannot be empty")
+        
+        results = chroma_manager.search_knowledge_base(query, n_results)
+        
+        return {
+            "query": query,
+            "results": results,
+            "total_results": len(results)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error searching knowledge base: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+"################################### Document ingestion End ###########################################"
+
+
 @app.post("/users/save")
 async def save_user(user_data: UserData):
     """Save user information"""
